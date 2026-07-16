@@ -10,6 +10,24 @@
 <meta property="og:description" content="指でつまんで、線香花火を灯す。落とさず、どれだけ長く灯し続けられるか。">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
+<script>
+(function(){
+  "use strict";
+  var ua = navigator.userAgent || "";
+  if (!/\bLine\//i.test(ua)) return;
+  var url = location.href;
+  if (/Android/i.test(ua)){
+    location.href = "intent://" + url.replace(/^https?:\/\//, "") + "#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=" + encodeURIComponent(url) + ";end";
+    return;
+  }
+  document.addEventListener("DOMContentLoaded", function(){
+    var bar = document.createElement("div");
+    bar.textContent = "カメラが使えない場合は、右上の「…」から「他のブラウザで開く」を選んでください";
+    bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;background:#1c1420;color:#efe6d8;font-size:.68rem;letter-spacing:.05em;padding:.6rem 1rem;text-align:center;line-height:1.6;box-shadow:0 2px 10px rgba(0,0,0,.4);";
+    document.body.appendChild(bar);
+  });
+})();
+</script>
 <style>
   :root{ --ink:#0b0710; --moon:#efe6d8; --ember:#ff9a3c; }
   *{margin:0;padding:0;box-sizing:border-box}
@@ -223,7 +241,7 @@ const Hand = {
   pinchCenter: {x:0,y:0},
   smoothCenter: {x:0,y:0},
 
-  camReady: false, camState: "未使用", camFingers: null,
+  camReady: false, camModelReady: false, camState: "未使用", camFingers: null,
 
   enableTilt(){
     const h = e => {
@@ -329,6 +347,7 @@ const Hand = {
 
       let smoothGap = 1, lastSeenAt = 0;
       hands.onResults(res => {
+        this.camModelReady = true;
         this.camState = "検知中";
         const lm = res.multiHandLandmarks && res.multiHandLandmarks[0];
         if (!lm){
@@ -635,20 +654,39 @@ function drawHandInk(dim){
 
   const palmY = Math.max(...pts.map(p=>p.y), gripPoint.y) + 46;
   const palmX = (pts[0].x + pts[1].x) / 2;
-  ctx.fillStyle = `rgba(28,20,30,${alpha*0.55})`;
+  ctx.fillStyle = `rgba(20,14,20,${alpha*0.5})`;
   ctx.beginPath(); ctx.ellipse(palmX, palmY, 30, 24, 0, 0, TAU); ctx.fill();
 
-  const color = `rgba(28,20,30,${alpha})`;
+  const color = `rgba(20,14,20,${alpha})`;
+  const tips = [];
   for (const p of pts){
     const jx = (Math.random()-0.5)*tremor, jy = (Math.random()-0.5)*tremor;
-    drawFingerShape(palmX, palmY, p.x+jx, p.y+jy, 9, 3.2, color);
+    const tip = {x:p.x+jx, y:p.y+jy};
+    tips.push(tip);
+    drawFingerShape(palmX, palmY, tip.x, tip.y, 9, 3.4, color);
   }
-  const tipMidX = (pts[0].x+pts[1].x)/2, tipMidY = (pts[0].y+pts[1].y)/2;
-  ctx.fillStyle = `rgba(28,20,30,${holding?0.55:0.12})`;
-  ctx.beginPath(); ctx.arc(tipMidX, tipMidY, 3.6, 0, TAU); ctx.fill();
+
+  if (holding){
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(255,180,110,${0.25*dim})`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2,4]);
+    ctx.beginPath(); ctx.moveTo(tips[0].x,tips[0].y); ctx.lineTo(tips[1].x,tips[1].y); ctx.stroke();
+    ctx.setLineDash([]);
+    for (const tip of tips){
+      let g = ctx.createRadialGradient(tip.x,tip.y,0,tip.x,tip.y,11);
+      g.addColorStop(0, `rgba(255,195,130,${0.5*dim})`);
+      g.addColorStop(1, "rgba(255,195,130,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(tip.x,tip.y,11,0,TAU); ctx.fill();
+      ctx.fillStyle = `rgba(255,235,210,${0.65*dim})`;
+      ctx.beginPath(); ctx.arc(tip.x,tip.y,2,0,TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
 
   if (!holding){
-    ctx.fillStyle = "rgba(239,230,216,0.4)";
+    ctx.fillStyle = "rgba(239,230,216,0.45)";
     ctx.font = "300 13px serif";
     ctx.textAlign = "center";
     ctx.fillText("二本指でつまんでください", W/2, H*0.5);
@@ -793,6 +831,7 @@ function batonUrl(seconds){
   const params = new URLSearchParams();
   if (name) params.set("from", name);
   params.set("sec", seconds);
+  params.set("openExternalBrowser", "1");
   return GAME_URL + "?" + params.toString();
 }
 
@@ -1011,7 +1050,7 @@ function frame(now){
       if (tip) drawIgniteProgress(clamp(holdTimer/IGNITE_HOLD, 0, 1), tip, flamePos);
       const waitEl = document.getElementById("waitMsg");
       waitEl.style.opacity = 1;
-      waitEl.textContent = (!Hand.camReady && Hand.camState.startsWith("手の検知モデルを準備中"))
+      waitEl.textContent = (!Hand.camModelReady && Hand.camState.startsWith("手の検知モデルを準備中"))
         ? Hand.camState
         : !gripping
           ? "二本の指で、線香花火の先を持ってください"
@@ -1151,9 +1190,21 @@ document.getElementById("lightBtn").addEventListener("click", async ()=>{
 });
 document.getElementById("againBtn").addEventListener("click", () => {
   running = false;
-  document.getElementById("ending").classList.remove("show");
-  waitingGrip = true; holdTimer = 0;
-  candleAlpha = 1; candleExtinguishing = false; extinguishT = 0;
+  const endingEl = document.getElementById("ending");
+  endingEl.classList.remove("show");
+  let revealed = false;
+  const revealWaitingScreen = () => {
+    if (revealed) return;
+    revealed = true;
+    endingEl.removeEventListener("transitionend", onTransitionEnd);
+    waitingGrip = true; holdTimer = 0;
+    candleAlpha = 1; candleExtinguishing = false; extinguishT = 0;
+  };
+  const onTransitionEnd = (e) => {
+    if (e.target === endingEl && e.propertyName === "opacity") revealWaitingScreen();
+  };
+  endingEl.addEventListener("transitionend", onTransitionEnd);
+  setTimeout(revealWaitingScreen, 3600);
 });
 document.getElementById("shareNativeBtn").addEventListener("click", nativeShare);
 document.getElementById("shareSaveBtn").addEventListener("click", saveShareImage);
