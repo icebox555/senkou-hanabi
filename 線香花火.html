@@ -301,6 +301,7 @@ const Hand = {
       const timer = setInterval(async () => {
         if (!this.camReady){ clearInterval(timer); return; }
         if (busy || video.readyState < 2) return;
+        if (this.touches.size > 0) return;
         busy = true;
         try{ await hands.send({ image: video }); }catch(e){}
         busy = false;
@@ -331,8 +332,12 @@ const Hand = {
     return clamp(Math.max(openRisk, jitter), 0, 1);
   },
 
+  camActive(){
+    return this.camReady && !!this.camFingers && this.touches.size === 0;
+  },
+
   updatePinch(){
-    if (this.camReady && this.camFingers){
+    if (this.camActive()){
       this.pinchRisk = this.pinchRiskCam || 0;
       return;
     }
@@ -350,7 +355,7 @@ const Hand = {
 
   reset(){
     this.baseBeta = null; this.instability = 0; this.pointerShake = 0;
-    this.initGap = null; this.touches.clear();
+    this.initGap = null;
   },
 
   update(dt){
@@ -396,6 +401,40 @@ let running=false, dropped=false, startT=0, elapsed=0;
 let dropBall=null, dropCause="";
 const sparks=[]; const MAX_SPARKS=420;
 const wind={x:0,y:0};
+const HARD_SHAKE_SPEED = 1650;
+let windChallengeT = 0;
+let ambientWind = {x:0,y:0}, ambientTarget = {x:0,y:0}, ambientTimer = 3;
+function updateAmbientWind(dt){
+  ambientTimer -= dt;
+  if (ambientTimer <= 0){
+    ambientTimer = rand(3, 6);
+    const ang = rand(0, TAU), mag = rand(60, 220);
+    ambientTarget = { x: Math.cos(ang)*mag, y: Math.abs(Math.sin(ang))*mag*0.25 };
+  }
+  ambientWind.x += (ambientTarget.x - ambientWind.x) * clamp(dt*0.5, 0, 1);
+  ambientWind.y += (ambientTarget.y - ambientWind.y) * clamp(dt*0.5, 0, 1);
+  wind.x += ambientWind.x*dt*2.2;
+  wind.y += ambientWind.y*dt*2.2;
+}
+function drawWindIndicator(){
+  const mag = Math.hypot(wind.x, wind.y);
+  const a = clamp(mag/900, 0, 1);
+  if (a < 0.05) return;
+  const ang = Math.atan2(wind.y, wind.x);
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.translate(W/2, Math.max(28, H*0.06));
+  ctx.rotate(ang);
+  ctx.strokeStyle = `rgba(239,230,216,${0.1+a*0.35})`;
+  ctx.lineWidth = 1.4;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-16,0); ctx.lineTo(16,0);
+  ctx.moveTo(16,0); ctx.lineTo(9,-5);
+  ctx.moveTo(16,0); ctx.lineTo(9,5);
+  ctx.stroke();
+  ctx.restore();
+}
 let lastTouch=null, lastTouchT=0;
 
 canvas.addEventListener("pointerdown", e=>{
@@ -428,7 +467,7 @@ canvas.addEventListener("pointerleave", releaseTouch);
 
 let anchorSmooth = null;
 function computeGripTarget(){
-  const camPts = (Hand.camReady && Hand.camFingers) ? Hand.camFingers : null;
+  const camPts = Hand.camActive() ? Hand.camFingers : null;
   if (camPts) return { x:(camPts[0].x+camPts[1].x)/2, y:(camPts[0].y+camPts[1].y)/2 };
   if (Hand.touches.size >= 2){
     const pts=[...Hand.touches.values()];
@@ -446,13 +485,25 @@ function anchor(){
   return anchorSmooth;
 }
 const koyoriLen = ()=>Math.min(H*0.34,300);
-function ballPos(t){
+let tipPos = null, tipVel = {x:0,y:0};
+const TIP_SPRING_K = 170, TIP_SPRING_DAMP = 14;
+function ballPos(t, dt){
   const a=anchor(), L=koyoriLen();
   const slow = Math.sin(t*0.7)*0.035 + Math.sin(t*0.23+1.7)*0.02;
   const jit = (Math.sin(t*13.7)+Math.sin(t*8.3+2))*0.004;
   const shake = Hand.instability * Math.sin(t*17) * 0.09;
-  const ang = slow + jit + Hand.gamma*0.14 + wind.x/9000 + shake;
-  return { x:a.x+Math.sin(ang)*L, y:a.y+Math.cos(ang)*L };
+  const ang = slow + jit + Hand.gamma*0.14 + shake;
+  const target = {
+    x: a.x + Math.sin(ang)*L + wind.x*0.035,
+    y: a.y + Math.cos(ang)*L + wind.y*0.035,
+  };
+  if (!tipPos) tipPos = { x:target.x, y:target.y };
+  const d = Math.min(0.05, dt || 0.016);
+  const ax = (target.x - tipPos.x)*TIP_SPRING_K - tipVel.x*TIP_SPRING_DAMP;
+  const ay = (target.y - tipPos.y)*TIP_SPRING_K - tipVel.y*TIP_SPRING_DAMP;
+  tipVel.x += ax*d; tipVel.y += ay*d;
+  tipPos.x += tipVel.x*d; tipPos.y += tipVel.y*d;
+  return tipPos;
 }
 
 function spawnSpark(x,y,phase,gen,boost){
@@ -542,7 +593,11 @@ function drawKoyori(bx,by,dim){
   grad.addColorStop(0.75,"rgba(150,130,110,0.45)");
   grad.addColorStop(1,`rgba(255,180,110,${0.55*dim+0.1})`);
   ctx.strokeStyle=grad;ctx.lineWidth=2.2;ctx.lineCap="round";
-  const mx=(a.x+bx)/2+Math.sin(by*0.05)*3, my=(a.y+by)/2;
+  const dx=bx-a.x, dy=by-a.y, len=Math.hypot(dx,dy)||1;
+  const nx=-dy/len, ny=dx/len;
+  const lateral = tipVel.x*nx + tipVel.y*ny;
+  const bend = clamp(lateral/900, -1, 1) * Math.min(len*0.22, 26) + Math.sin(by*0.05)*3;
+  const mx=(a.x+bx)/2 + nx*bend, my=(a.y+by)/2 + ny*bend;
   ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(mx,my,bx,by);ctx.stroke();
 }
 
@@ -565,7 +620,7 @@ function drawHandInk(dim, showOwnHint){
   const a = anchor();
   const gripPoint = { x: a.x, y: Math.max(a.y, 26) };
 
-  const camPts = (Hand.camReady && Hand.camFingers) ? Hand.camFingers : null;
+  const camPts = Hand.camActive() ? Hand.camFingers : null;
   const touchHolding = Hand.touches.size >= 2;
   const holding = !!camPts || touchHolding;
   const alpha = holding ? (0.72 - Hand.pinchRisk*0.32) : 0.16;
@@ -622,12 +677,32 @@ function showPhase(name){
   },700);
 }
 
-function dropNow(bx,by,cause){
+function dropNow(bx,by,cause,vel){
   dropped=true; dropCause=cause;
-  dropBall={x:bx,y:by,vx:rand(-14,14),vy:30,r:1};
+  if (cause==="burnout"){
+    dropBall={x:bx,y:by,vx:0,vy:0,r:1,fading:true};
+  } else {
+    const v = vel || {x:rand(-14,14), y:30};
+    dropBall={x:bx,y:by,vx:clamp(v.x,-700,700),vy:clamp(v.y,-300,900),r:1,fading:false};
+  }
   Sound.thud();
   setTimeout(finish,1600);
 }
+const CAPTION_POOLS = {
+  fast:    ["え、はやすぎん？", "まばたきで終わった", "一瞬の芸術"],
+  long:    ["もはや修行", "粘り強すぎる", "まだ燃えるんかい"],
+  dropped: ["手が忙しい人だ", "落ち着いて…落ち着いて", "つい、ゆらしちゃった"],
+  burnout: ["灯し切った、勝ち", "最後まで見届けた", "静かな勝利", "今宵はこんな感じ"],
+};
+function pickCaption(seconds, cause){
+  let pool;
+  if (cause !== "burnout") pool = CAPTION_POOLS.dropped;
+  else if (seconds < 5) pool = CAPTION_POOLS.fast;
+  else if (seconds > 25) pool = CAPTION_POOLS.long;
+  else pool = CAPTION_POOLS.burnout;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
 let lastSeconds=0, lastCause="", lastCount=1;
 function finish(){
   document.getElementById("finalTime").textContent=elapsed.toFixed(1);
@@ -644,8 +719,9 @@ function finish(){
 
   lastSeconds=elapsed; lastCause=dropCause; lastCount=count;
   const textInput = document.getElementById("shareTextInput");
-  textInput.value = "";
-  buildShareImage(elapsed, dropCause, count, "");
+  const autoCaption = pickCaption(elapsed, dropCause);
+  textInput.value = autoCaption;
+  buildShareImage(elapsed, dropCause, count, autoCaption);
 }
 
 function wrapFillText(g, text, cx, cy, maxWidth, lineHeight){
@@ -741,9 +817,16 @@ function batonUrl(seconds){
   return GAME_URL + "?" + params.toString();
 }
 
+const FILE_NAME_POOL = ["線香花火の記憶","夜のいたずら","うろの証拠写真","指先の火祭り","今宵の一本","花火迷宮","小さな灯火","燃え尽きた証","静かな夜の記録","火花の余韻"];
+function randomFileName(){
+  const stem = FILE_NAME_POOL[Math.floor(Math.random()*FILE_NAME_POOL.length)];
+  const suffix = Math.floor(1000+Math.random()*9000);
+  return `${stem}-${suffix}.png`;
+}
+
 async function nativeShare(){
   if (!window.__shareBlob){ return; }
-  const file = new File([window.__shareBlob], "senko-hanabi.png", { type:"image/png" });
+  const file = new File([window.__shareBlob], randomFileName(), { type:"image/png" });
   const seconds = document.getElementById("finalTime").textContent;
   const link = batonUrl(seconds);
   if (navigator.canShare && navigator.canShare({ files:[file] })){
@@ -761,7 +844,7 @@ function saveShareImage(){
   if (!shareBlobUrl) return;
   const a = document.createElement("a");
   a.href = shareBlobUrl;
-  a.download = "senko-hanabi.png";
+  a.download = randomFileName();
   a.click();
 }
 function openIntent(kind){
@@ -776,7 +859,7 @@ function openIntent(kind){
 }
 
 function getHandMid(){
-  const camPts = (Hand.camReady && Hand.camFingers) ? Hand.camFingers : null;
+  const camPts = Hand.camActive() ? Hand.camFingers : null;
   if (camPts) return { x:(camPts[0].x+camPts[1].x)/2, y:(camPts[0].y+camPts[1].y)/2 };
   if (Hand.touches.size >= 2){
     const pts=[...Hand.touches.values()];
@@ -946,7 +1029,7 @@ function frame(now){
     if (waitingGrip){
       drawHandInk(1, false);
       drawUnlitSparkler(1);
-      const gripping = (Hand.camReady && Hand.camFingers) || Hand.touches.size >= 2;
+      const gripping = Hand.camActive() || Hand.touches.size >= 2;
       const tip = gripping ? getUnlitTipPos() : null;
       const flamePos = candleFlamePos();
       const dist = tip ? Math.hypot(tip.x-flamePos.x, tip.y-flamePos.y) : Infinity;
@@ -977,12 +1060,18 @@ function frame(now){
   if (!dropped){
     elapsed=t-startT;
     const ph=phaseAt(elapsed);
-    if (!ph){ const bp=ballPos(t); dropNow(bp.x,bp.y,"burnout"); return; }
+    if (!ph){
+      const bp=ballPos(t,dt);
+      if (windChallengeT >= 3) unlockAchievement("windMaster");
+      unlockAchievement("burnoutFirst");
+      dropNow(bp.x,bp.y,"burnout");
+      return;
+    }
 
     const {p,local}=ph;
     showPhase(p.name);
     timerEl.textContent=elapsed.toFixed(1)+" 秒";
-    const bp=ballPos(t);
+    const bp=ballPos(t,dt);
 
     let boost=1;
     if (p.key==="matsuba"){
@@ -994,6 +1083,17 @@ function frame(now){
     const vulnerable = p.key!=="tsubomi";
     const danger = Hand.instability;
     dangerEl.style.opacity = vulnerable ? (danger*danger*0.9) : 0;
+    if (vulnerable){
+      updateAmbientWind(dt);
+      drawWindIndicator();
+      if (Math.hypot(wind.x,wind.y) > 380) windChallengeT += dt;
+    }
+    const tipSpeed = Math.hypot(tipVel.x, tipVel.y);
+    if (vulnerable && tipSpeed > HARD_SHAKE_SPEED){
+      unlockAchievement("hardShake");
+      dropNow(bp.x,bp.y,"shake",{x:tipVel.x*0.5,y:tipVel.y*0.5-60});
+      return;
+    }
     if (vulnerable && danger>0.55){
       dropRisk += (danger-0.55)*dt*2.6 * (p.key==="chirigiku"?2.2:1);
       if (dropRisk>rand(0.6,1.0)){ dropNow(bp.x,bp.y,"shake"); return; }
@@ -1029,8 +1129,8 @@ function frame(now){
     drawKoyori(bp.x,bp.y,dim);
     drawSparks();
     drawBall(bp.x,bp.y,t,scale,dim);
-    drawHandInk(dim);
     maybeCapturePeak(p.key, surge.level);
+    drawHandInk(dim);
     if (typeof drawFireflies === "function") drawFireflies(t);
     if (typeof rainbowMode !== "undefined" && rainbowMode && debugFrameCount === 0){
       canvas.style.filter = `hue-rotate(${Math.floor(t*90)%360}deg) saturate(1.3)`;
@@ -1044,15 +1144,22 @@ function frame(now){
     }
 
   } else if (dropBall){
-    dropBall.vy+=520*dt;
-    dropBall.x+=dropBall.vx*dt;
-    dropBall.y+=dropBall.vy*dt;
-    dropBall.r*=Math.pow(0.5,dt);
-    const ground=H*0.86;
-    if (dropBall.y>ground){dropBall.y=ground;dropBall.r*=0.6;dropBall.vy=0;}
-    updateSparks(dt);
-    drawSparks();
-    drawBall(dropBall.x,dropBall.y,t,0.5*dropBall.r,dropBall.r);
+    if (dropBall.fading){
+      dropBall.r = Math.max(0, dropBall.r - dt*0.62);
+      updateSparks(dt);
+      drawSparks();
+      drawBall(dropBall.x,dropBall.y,t,0.4+dropBall.r*0.6,dropBall.r);
+    } else {
+      dropBall.vy+=520*dt;
+      dropBall.x+=dropBall.vx*dt;
+      dropBall.y+=dropBall.vy*dt;
+      dropBall.r*=Math.pow(0.5,dt);
+      const ground=H*0.86;
+      if (dropBall.y>ground){dropBall.y=ground;dropBall.r*=0.6;dropBall.vy=0;}
+      updateSparks(dt);
+      drawSparks();
+      drawBall(dropBall.x,dropBall.y,t,0.5*dropBall.r,dropBall.r);
+    }
     timerEl.textContent="";
     dangerEl.style.opacity=0;
   }
@@ -1063,6 +1170,9 @@ function light(){
   sparks.length=0;
   dropped=false; dropBall=null; dropCause="";
   shownPhase=""; spawnCarry=0; dropRisk=0;
+  tipPos=null; tipVel={x:0,y:0};
+  windChallengeT=0; wind.x=0; wind.y=0;
+  ambientWind={x:0,y:0}; ambientTarget={x:0,y:0}; ambientTimer=rand(3,6);
   Hand.reset();
   rollPhases();
   peakScore = -1; peakCanvas = null;
@@ -1137,23 +1247,29 @@ function flashFilter(css, ms){
 }
 
 const ACHIEVEMENTS = [
-  { id:"blueFlame",    title:"青い火",         desc:"タイトルの文字を、長押しした。",                 theme:"blue" },
-  { id:"greenFlame",   title:"緑の火",         desc:"ろうそくの火を、すばやく6回タップした。",         theme:"green" },
-  { id:"rainbowSpark", title:"虹の火花",       desc:"ログのボタンを、すばやく2回タップした。",         theme:"rainbow", hintAlways:true },
-  { id:"uroArrive",    title:"URO参上",        desc:"「u」「r」「o」と、順番にキーを押した。",         theme:"purple" },
-  { id:"mischief5",    title:"うろのいたずら", desc:"タイトルの文字を、すばやく5回タップした。" },
-  { id:"candleFlee",   title:"臆病なろうそく", desc:"ろうそくの火を、長押しした。" },
-  { id:"stageSteal",   title:"見せ場泥棒",     desc:"火花の名前を、すばやく7回タップした。" },
-  { id:"silentNight",  title:"静かな夜",       desc:"タイマーを、すばやく8回タップした。" },
-  { id:"resetCount",   title:"記録の消去",     desc:"数えた本数を、長押しした。" },
-  { id:"nightWind",    title:"夜風のいたずら", desc:"端末を、すばやく3回振った。" },
-  { id:"fireflies",    title:"迷い蛍",         desc:"二本指で、すばやく3回タップした。" },
+  { id:"blueFlame",    title:"青い火",         desc:"タイトルの文字を、長押しした。",                     hint:"〇〇を、長押しした。",                 theme:"blue" },
+  { id:"greenFlame",   title:"緑の火",         desc:"ろうそくの火を、すばやく6回タップした。",             hint:"〇〇を、すばやく6回タップした。",       theme:"green" },
+  { id:"rainbowSpark", title:"虹の火花",       desc:"ログのボタンを、すばやく2回タップした。",             hint:"〇〇を、すばやく2回タップした。",       theme:"rainbow" },
+  { id:"uroArrive",    title:"URO参上",        desc:"「u」「r」「o」と、順番にキーを押した。",             hint:"〇〇と、順番にキーを押した。",         theme:"purple" },
+  { id:"mischief5",    title:"うろのいたずら", desc:"タイトルの文字を、すばやく5回タップした。",           hint:"〇〇を、すばやく5回タップした。" },
+  { id:"candleFlee",   title:"臆病なろうそく", desc:"ろうそくの火を、長押しした。",                       hint:"〇〇を、長押しした。" },
+  { id:"stageSteal",   title:"見せ場泥棒",     desc:"火花の名前を、すばやく7回タップした。",               hint:"〇〇を、すばやく7回タップした。" },
+  { id:"silentNight",  title:"静かな夜",       desc:"タイマーを、すばやく8回タップした。",                 hint:"〇〇を、すばやく8回タップした。" },
+  { id:"resetCount",   title:"記録の消去",     desc:"数えた本数を、長押しした。",                         hint:"〇〇を、長押しした。" },
+  { id:"nightWind",    title:"夜風のいたずら", desc:"端末を、すばやく3回振った。",                       hint:"端末を、すばやく〇回振った。" },
+  { id:"fireflies",    title:"迷い蛍",         desc:"二本指で、すばやく3回タップした。",                 hint:"二本指で、すばやく〇回タップした。" },
+  { id:"burnoutFirst", title:"灯し切りの証",   desc:"はじめて、最後まで灯し切った。",                     hint:"〇〇に、はじめて成功した。",           theme:"silver" },
+  { id:"windMaster",   title:"夜風を乗りこなした", desc:"強い夜風の中、灯し切った。",                     hint:"強い〇〇の中、灯し切った。",           theme:"teal" },
+  { id:"hardShake",    title:"荒ぶる火花",     desc:"線香花火を、思いきり振った。",                       hint:"〇〇を、思いきり振った。",             theme:"crimson" },
 ];
 const THEMES = [
   { id:"gold",    label:"金", swatch:"radial-gradient(circle at 35% 35%, #fff6d8, #ff9a3c 75%)" },
   { id:"blue",    label:"青", swatch:"radial-gradient(circle at 35% 35%, #eaf6ff, #3ca0ff 75%)" },
   { id:"green",   label:"緑", swatch:"radial-gradient(circle at 35% 35%, #eafcea, #3cbf5a 75%)" },
   { id:"purple",  label:"紫", swatch:"radial-gradient(circle at 35% 35%, #f6ecff, #b23cff 75%)" },
+  { id:"silver",  label:"銀", swatch:"radial-gradient(circle at 35% 35%, #ffffff, #b9c2c8 75%)" },
+  { id:"teal",    label:"水", swatch:"radial-gradient(circle at 35% 35%, #e8fffb, #2cc4b3 75%)" },
+  { id:"crimson", label:"紅", swatch:"radial-gradient(circle at 35% 35%, #ffecec, #d81c3f 75%)" },
   { id:"rainbow", label:"虹", swatch:"conic-gradient(red,orange,yellow,green,blue,indigo,violet,red)" },
 ];
 let unlockedAch = new Set();
@@ -1165,10 +1281,13 @@ try{ currentTheme = localStorage.getItem("senko_current_theme") || "gold"; }catc
 
 function themeFilter(id){
   switch(id){
-    case "blue":   return "hue-rotate(200deg) saturate(1.15)";
-    case "green":  return "hue-rotate(110deg) saturate(1.15)";
-    case "purple": return "hue-rotate(300deg) saturate(1.3)";
-    default:       return "";
+    case "blue":    return "hue-rotate(200deg) saturate(1.15)";
+    case "green":   return "hue-rotate(110deg) saturate(1.15)";
+    case "purple":  return "hue-rotate(300deg) saturate(1.3)";
+    case "silver":  return "saturate(0.15) brightness(1.25)";
+    case "teal":    return "hue-rotate(150deg) saturate(1.3)";
+    case "crimson": return "hue-rotate(345deg) saturate(1.5)";
+    default:        return "";
   }
 }
 function applyCurrentTheme(){
@@ -1221,10 +1340,9 @@ function renderAchModal(){
   progEl.textContent = unlockedAch.size + " / " + ACHIEVEMENTS.length + " 解除";
   listEl.innerHTML = ACHIEVEMENTS.map(a => {
     const unlocked = unlockedAch.has(a.id);
-    const known = unlocked || a.hintAlways;
-    const title = known ? a.title : "？？？";
-    const desc = known ? a.desc : "";
-    return `<div style="border:1px solid rgba(239,230,216,${unlocked?0.4:0.15});border-radius:10px;padding:.6rem .9rem;opacity:${unlocked?1:(a.hintAlways?0.75:0.4)};">`
+    const title = unlocked ? a.title : "？？？";
+    const desc = unlocked ? a.desc : a.hint;
+    return `<div style="border:1px solid rgba(239,230,216,${unlocked?0.4:0.15});border-radius:10px;padding:.6rem .9rem;opacity:${unlocked?1:0.55};">`
       + `<div style="font-size:.72rem;letter-spacing:.08em;">${unlocked?"解除":"未解除"}　${escapeHtml(title)}</div>`
       + (desc ? `<div style="font-size:.6rem;opacity:.7;margin-top:.25rem;line-height:1.5;">${escapeHtml(desc)}</div>` : "")
       + `</div>`;
