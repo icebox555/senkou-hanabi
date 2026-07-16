@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>線香花火</title>
+<meta name="description" content="指でつまんで、線香花火を灯す。落とさず、どれだけ長く灯し続けられるか。">
+<meta name="theme-color" content="#0b0710">
+<meta property="og:title" content="線香花火">
+<meta property="og:description" content="指でつまんで、線香花火を灯す。落とさず、どれだけ長く灯し続けられるか。">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
 <style>
   :root{ --ink:#0b0710; --moon:#efe6d8; --ember:#ff9a3c; }
   *{margin:0;padding:0;box-sizing:border-box}
@@ -32,7 +38,7 @@
   #debug{position:fixed;top:max(.6rem,env(safe-area-inset-top));left:.8rem;z-index:6;font-family:ui-monospace,Menlo,monospace;font-size:.62rem;line-height:1.7;color:rgba(160,220,160,.75);pointer-events:none;white-space:pre;}
   @media (prefers-reduced-motion:reduce){#intro,#phaseName,#ending,#danger{transition:none}}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous" integrity="sha384-oHwoZ9HyKv5ark5VOH+XWdbNfmhYtptAOBuV8plz6mAfXvTA6d8fULuYllWouEK2" defer></script>
 </head>
 <body>
 <canvas id="stage" width="2510" height="844" style="width: 2510px; height: 844px;"></canvas>
@@ -391,6 +397,8 @@ canvas.addEventListener("pointerdown", e=>{
     Hand.touches.set(e.pointerId, {x:e.clientX, y:e.clientY});
   } else {
     lastTouch={x:e.clientX,y:e.clientY}; lastTouchT=performance.now();
+    Hand.touches.set("mouseA", {x:e.clientX-15, y:e.clientY});
+    Hand.touches.set("mouseB", {x:e.clientX+15, y:e.clientY});
   }
 });
 canvas.addEventListener("pointermove", e=>{
@@ -405,10 +413,14 @@ canvas.addEventListener("pointermove", e=>{
   const v = Math.hypot(dx,dy)/dt;
   Hand.pointerShake = clamp(Hand.pointerShake + (v-900)/4000, 0, 1);
   lastTouch={x:e.clientX,y:e.clientY}; lastTouchT=now;
+  if (Hand.touches.has("mouseA")){
+    Hand.touches.set("mouseA", {x:e.clientX-15, y:e.clientY});
+    Hand.touches.set("mouseB", {x:e.clientX+15, y:e.clientY});
+  }
 });
 function releaseTouch(e){
   if (e.pointerType === "touch") Hand.touches.delete(e.pointerId);
-  else lastTouch=null;
+  else { lastTouch=null; Hand.touches.delete("mouseA"); Hand.touches.delete("mouseB"); }
 }
 canvas.addEventListener("pointerup", releaseTouch);
 canvas.addEventListener("pointercancel", releaseTouch);
