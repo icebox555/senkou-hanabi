@@ -311,6 +311,14 @@ const Hand = {
       this.populateCamList();
 
       this.camState = "手の検知モデルを準備中…";
+      const prepStart = performance.now();
+      const prepTicker = setInterval(() => {
+        if (!this.camState.startsWith("手の検知モデルを準備中")){ clearInterval(prepTicker); return; }
+        const sec = Math.floor((performance.now()-prepStart)/1000);
+        this.camState = "手の検知モデルを準備中…(" + sec + "秒経過)" +
+          (sec >= 10 ? " ※通信状況により時間がかかる場合があります。その間もマウス/タッチで操作できます" : "");
+        if (sec >= 20){ clearInterval(prepTicker); }
+      }, 1000);
       const hands = new Hands({
         locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}`
       });
@@ -1003,13 +1011,15 @@ function frame(now){
       if (tip) drawIgniteProgress(clamp(holdTimer/IGNITE_HOLD, 0, 1), tip, flamePos);
       const waitEl = document.getElementById("waitMsg");
       waitEl.style.opacity = 1;
-      waitEl.textContent = !gripping
-        ? "二本の指で、線香花火の先を持ってください"
-        : !near
-          ? "ろうそくの火に近づけてください"
-          : (holdTimer < IGNITE_HOLD
-              ? "そのまま近づけて…（あと" + (IGNITE_HOLD-holdTimer).toFixed(1) + "秒）"
-              : "火が移りました");
+      waitEl.textContent = (!Hand.camReady && Hand.camState.startsWith("手の検知モデルを準備中"))
+        ? Hand.camState
+        : !gripping
+          ? "二本の指で、線香花火の先を持ってください"
+          : !near
+            ? "ろうそくの火に近づけてください"
+            : (holdTimer < IGNITE_HOLD
+                ? "そのまま近づけて…（あと" + (IGNITE_HOLD-holdTimer).toFixed(1) + "秒）"
+                : "火が移りました");
       if (holdTimer >= IGNITE_HOLD){
         waitingGrip = false;
         waitEl.style.opacity = 0;
