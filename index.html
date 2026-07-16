@@ -4,9 +4,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>bonriva studio</title>
 <style>
-  html,body{height:100%;margin:0;background:#0b0710;color:#efe6d8;
-    font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;
-    display:flex;align-items:center;justify-content:center;}
+  html,body{min-height:100%;margin:0;background:#0b0710;color:#efe6d8;
+    font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;}
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:1.6rem;padding:3rem 1.5rem;}
+  h1{font-weight:500;font-size:1.1rem;letter-spacing:.6em;text-indent:.6em;opacity:.7;margin:0;}
+  .list{display:flex;flex-direction:column;gap:.9rem;align-items:center;}
   a{color:#efe6d8;text-decoration:none;border:1px solid rgba(239,230,216,.35);
     border-radius:999px;padding:.8rem 2.2rem;font-size:.95rem;letter-spacing:.3em;
     text-indent:.3em;transition:border-color .3s,color .3s;}
@@ -14,5 +17,8 @@
 </style>
 </head>
 <body>
-  <a href="/senko-hanabi/">線香花火 →</a>
+  <h1>bonriva studio</h1>
+  <div class="list">
+    <a href="/senko-hanabi/">線香花火 →</a>
+  </div>
 </body></html>

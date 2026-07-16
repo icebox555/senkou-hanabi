@@ -1,7 +1,4 @@
 {
   "cleanUrls": true,
-  "trailingSlash": false,
-  "rewrites": [
-    { "source": "/senko-hanabi", "destination": "/senko-hanabi/index.html" }
-  ]
+  "trailingSlash": false
 }
