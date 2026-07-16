@@ -684,13 +684,6 @@ function drawHandInk(dim){
     }
     ctx.globalCompositeOperation = "source-over";
   }
-
-  if (!holding){
-    ctx.fillStyle = "rgba(239,230,216,0.45)";
-    ctx.font = "300 13px serif";
-    ctx.textAlign = "center";
-    ctx.fillText("二本指でつまんでください", W/2, H*0.5);
-  }
 }
 
 function phaseAt(t){
