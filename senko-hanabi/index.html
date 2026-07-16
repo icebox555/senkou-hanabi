@@ -87,6 +87,9 @@
 </div>
 
 <video id="cam" playsinline="" muted="muted" style="display:none"></video>
+<select id="camSelect" style="display:none;position:fixed;top:max(.6rem,env(safe-area-inset-top));right:.6rem;z-index:7;
+  font-family:inherit;font-size:.65rem;background:#1c1420;color:var(--moon);
+  border:1px solid rgba(239,230,216,.3);border-radius:6px;padding:.3rem .5rem;max-width:42vw;"></select>
 
 <script>
 (() => {
@@ -249,6 +252,49 @@ const Hand = {
     }
   },
 
+  stream: null, videoDeviceId: null,
+
+  async populateCamList(){
+    try{
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === "videoinput");
+      const sel = document.getElementById("camSelect");
+      if (cams.length < 2){ sel.style.display = "none"; return; }
+      sel.innerHTML = "";
+      cams.forEach((d, i) => {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || ("カメラ " + (i+1));
+        if (d.deviceId === this.videoDeviceId) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.style.display = "block";
+      if (!sel.dataset.bound){
+        sel.dataset.bound = "1";
+        sel.addEventListener("change", () => this.switchCam(sel.value));
+      }
+    }catch(e){}
+  },
+
+  async switchCam(deviceId){
+    try{
+      this.camState = "カメラを切り替え中…";
+      if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video:{ deviceId:{exact:deviceId}, width:{ideal:176}, height:{ideal:132} }, audio:false
+      });
+      this.videoDeviceId = deviceId;
+      this.stream = stream;
+      const video = document.getElementById("cam");
+      video.srcObject = stream;
+      await video.play();
+      this.camState = "検知中";
+      this.populateCamList();
+    }catch(e){
+      this.camState = "カメラ切替に失敗";
+    }
+  },
+
   async enableCam(){
     if (typeof Hands === "undefined"){
       this.camState = "モデル読込に失敗（ネット未接続の可能性）";
@@ -258,9 +304,11 @@ const Hand = {
       const stream = await navigator.mediaDevices.getUserMedia({
         video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132} }, audio:false
       });
+      this.stream = stream;
       const video = document.getElementById("cam");
       video.srcObject = stream;
       await video.play();
+      this.populateCamList();
 
       this.camState = "手の検知モデルを準備中…";
       const hands = new Hands({
