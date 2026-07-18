@@ -72,7 +72,7 @@
     text-align:center;outline:none;">
   <button class="btn" id="lightBtn">はじめる</button>
   <div id="hint">インカメで指を見ます（許可を求められます）。<br>線香花火の先（火がついていない方）を、画面いちばん下のろうそくの炎に軽く近づけてください。<br>そのまま2〜3秒待つと、火が移ります。</div>
-  <div id="uroCredit" style="position:fixed;bottom:1rem;left:0;right:0;text-align:center;font-size:.58rem;letter-spacing:.2em;opacity:.28;">Powered by URO</div>
+  <div id="uroCredit" style="position:fixed;bottom:1rem;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:.4em;font-size:.58rem;letter-spacing:.2em;opacity:.28;">Powered by <img src="/image/uro_logo_white.png" alt="URO" style="height:1.1em;width:auto;vertical-align:middle;"></div>
 </div>
 
 <div id="phaseName"></div>
@@ -455,6 +455,7 @@ const Hand = {
       };
 
       let smoothGap = 1, lastSeenAt = performance.now(), lastLowLightFlag = false;
+      let smoothThumb = null, smoothIndex = null, smoothHandScale = 0.15;
       hands.onResults(res => {
         this.camModelReady = true;
         this.camState = "検知中";
@@ -468,19 +469,34 @@ const Hand = {
         }
         const lm = res.multiHandLandmarks && res.multiHandLandmarks[0];
         if (!lm){
-          if (performance.now() - lastSeenAt > 260) this.camFingers = null;
+          if (performance.now() - lastSeenAt > 260){
+            this.camFingers = null;
+            smoothThumb = null; smoothIndex = null;
+          }
           return;
         }
         lastSeenAt = performance.now();
 
         const thumb = lm[4], index = lm[8], wrist = lm[0], midMcp = lm[9];
         const toScreen = pt => ({ x: (1 - pt.x) * W, y: pt.y * H });
-        this.camFingers = [toScreen(thumb), toScreen(index)];
+        const rawThumb = toScreen(thumb), rawIndex = toScreen(index);
+
+        // ランドマーク座標自体を指数移動平均で平滑化してから使う。
+        // 低解像度(176x132)・軽量モデルゆえのフレーム間ジッターが、そのまま
+        // つまみ判定のON/OFF・指位置のブレに直結していたため。
+        if (!smoothThumb){ smoothThumb = {...rawThumb}; smoothIndex = {...rawIndex}; }
+        const posSmooth = 0.45;
+        smoothThumb.x += (rawThumb.x - smoothThumb.x) * posSmooth;
+        smoothThumb.y += (rawThumb.y - smoothThumb.y) * posSmooth;
+        smoothIndex.x += (rawIndex.x - smoothIndex.x) * posSmooth;
+        smoothIndex.y += (rawIndex.y - smoothIndex.y) * posSmooth;
+        this.camFingers = [{...smoothThumb}, {...smoothIndex}];
 
         const handScale = Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y) || 0.15;
-        const gap = Math.hypot(thumb.x - index.x, thumb.y - index.y) / handScale;
-        smoothGap += (gap - smoothGap) * 0.35;
-        this.pinchRiskCam = clamp((smoothGap - 0.35) / 0.55, 0, 1);
+        smoothHandScale += (handScale - smoothHandScale) * 0.3;
+        const gap = Math.hypot(thumb.x - index.x, thumb.y - index.y) / smoothHandScale;
+        smoothGap += (gap - smoothGap) * 0.25;
+        this.pinchRiskCam = clamp((smoothGap - 0.4) / 0.55, 0, 1);
       });
 
       let busy = false;
@@ -977,7 +993,7 @@ function wrapFillText(g, text, cx, cy, maxWidth, lineHeight){
 let shareBlobUrl = null;
 
 function buildShareImage(seconds, cause, count, customText){
-  const w = 1920, h = 1080; // 16:9固定
+  const w = 1080, h = 1920; // 9:16固定
   const out = document.createElement("canvas");
   out.width = w; out.height = h;
   const g = out.getContext("2d");
@@ -1005,34 +1021,34 @@ function buildShareImage(seconds, cause, count, customText){
   g.fillRect(0,0,w,h);
 
   g.fillStyle = "rgba(239,230,216,0.75)";
-  g.font = "300 26px serif";
+  g.font = "300 32px serif";
   g.textAlign = "center";
-  g.fillText("線 香 花 火", w/2, 56);
+  g.fillText("線 香 花 火", w/2, 80);
 
   const displayText = (customText && customText.trim()) ? customText.trim().slice(0,40) : lastAutoCaption;
   if (displayText){
-    g.font = "300 26px serif";
+    g.font = "300 30px serif";
     g.fillStyle = "rgba(239,230,216,0.88)";
-    wrapFillText(g, displayText, w/2, 108, w*0.7, 34);
+    wrapFillText(g, displayText, w/2, 148, w*0.78, 40);
   }
 
   g.textAlign = "right";
   g.fillStyle = "#efe6d8";
-  g.font = "500 110px serif";
-  g.fillText(seconds.toFixed(1), w/2+150, h-90);
+  g.font = "500 140px serif";
+  g.fillText(seconds.toFixed(1), w/2+180, h-190);
   g.textAlign = "left";
-  g.font = "300 28px serif";
+  g.font = "300 32px serif";
   g.fillStyle = "rgba(239,230,216,0.7)";
-  g.fillText("秒", w/2+160, h-90);
+  g.fillText("秒", w/2+190, h-190);
 
   g.textAlign = "center";
-  g.font = "300 24px serif";
+  g.font = "300 26px serif";
   g.fillStyle = "rgba(239,230,216,0.6)";
-  g.fillText(cause==="burnout" ? "灯し切った" : "指がゆるんで、落とした", w/2, h-45);
+  g.fillText(cause==="burnout" ? "灯し切った" : "指がゆるんで、落とした", w/2, h-130);
 
-  g.font = "300 18px serif";
+  g.font = "300 20px serif";
   g.fillStyle = "rgba(239,230,216,0.4)";
-  g.fillText(count + " 本目", w/2, h-18);
+  g.fillText(count + " 本目", w/2, h-95);
 
   out.toBlob(blob => {
     if (shareBlobUrl) URL.revokeObjectURL(shareBlobUrl);
@@ -1060,19 +1076,33 @@ function batonUrl(seconds){
 }
 
 async function nativeShare(){
-  if (!window.__shareBlob){ return; }
+  if (!window.__shareBlob){ achToast("画像を準備中です。少し待ってからもう一度お試しください"); return; }
   const file = new File([window.__shareBlob], funFileName(), { type:"image/png" });
   const seconds = document.getElementById("finalTime").textContent;
   const link = batonUrl(seconds);
-  if (navigator.canShare && navigator.canShare({ files:[file] })){
-    try{ await navigator.share({ files:[file], title:"線香花火", text:"線香花火、" + seconds + "秒。次はキミの番。\n" + link }); }
-    catch(e){}
-  } else {
-    saveShareImage();
-    if (navigator.share){
-      try{ await navigator.share({ title:"線香花火", text:"線香花火、" + seconds + "秒。次はキミの番。", url:link }); }
-      catch(e){}
+
+  // canShareが例外を投げる実装があるため必ずtry/catchで判定する
+  let canShareFiles = false;
+  try{ canShareFiles = !!(navigator.canShare && navigator.canShare({ files:[file] })); }catch(e){}
+
+  if (canShareFiles){
+    try{
+      await navigator.share({ files:[file], title:"線香花火", text:"線香花火、" + seconds + "秒。次はキミの番。\n" + link });
+    }catch(e){
+      if (e && e.name === "AbortError") return; // ユーザーがシェアをキャンセルしただけ
+      // 画像付き共有に失敗した端末向けに、確実に画像だけは残す
+      saveShareImage();
+      achToast("この端末では画像を直接シェアできなかったため、画像を保存しました");
     }
+    return;
+  }
+
+  // 画像添付共有に対応していない端末: 画像は保存し、リンク共有は文言で案内する
+  saveShareImage();
+  achToast("画像を保存しました。シェア先に画像を添付してください");
+  if (navigator.share){
+    try{ await navigator.share({ title:"線香花火", text:"線香花火、" + seconds + "秒。次はキミの番。", url:link }); }
+    catch(e){}
   }
 }
 function saveShareImage(){
@@ -1120,37 +1150,63 @@ function drawUnlitSparkler(dim){
   const a = anchor();
   const tip = getUnlitTipPos();
   ctx.globalCompositeOperation = "source-over";
-  const segs = 22;
-  for (let i=0;i<segs;i++){
-    const t0=i/segs, t1=(i+1)/segs;
-    const x0=a.x+(tip.x-a.x)*t0, y0=a.y+(tip.y-a.y)*t0;
-    const x1=a.x+(tip.x-a.x)*t1, y1=a.y+(tip.y-a.y)*t1;
-    // 実際の紙縒りは均一なストライプではなく、ねじれた紙の陰影が不規則に揺れて見えるため
-    // 周期の異なる複数のsin波を重ね、太さもわずかに揺らして手作業感を出す
-    const twist = Math.sin(t0*Math.PI*9)*2.1 + Math.sin(t0*Math.PI*3.3+1.2)*0.9;
-    const shade = 0.5 + 0.5*Math.sin(t0*Math.PI*9 + 0.5);
-    const r = Math.round(198 - shade*46), gg = Math.round(150 - shade*55), b = Math.round(110 - shade*45);
-    ctx.strokeStyle = `rgba(${r},${gg},${b},${0.92*dim})`;
-    ctx.lineWidth = 3.1 + Math.sin(t0*Math.PI*5)*0.5;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(x0+twist, y0);
-    ctx.lineTo(x1+twist, y1);
-    ctx.stroke();
+  // 区切ったストロークを継ぎ足すと縁が段差になって「四角の連なり」に見えるため、
+  // 密にサンプリングした1本のリボン形状として塗りつぶし、ねじれは表面の陰影線で表現する。
+  const N = 48;
+  const twistOf = t => Math.sin(t*Math.PI*9)*2.1 + Math.sin(t*Math.PI*3.3+1.2)*0.9;
+  const halfWOf = t => 1.55 + Math.sin(t*Math.PI*9+0.6)*0.35 + (1-t)*0.35; // 根元がわずかに太い
+  const pts = [];
+  for (let i=0;i<=N;i++){
+    const t = i/N;
+    const cx = a.x + (tip.x-a.x)*t + twistOf(t);
+    const cy = a.y + (tip.y-a.y)*t;
+    pts.push({ x:cx, y:cy, hw:halfWOf(t), t });
   }
-  // 紙縒りの継ぎ目の細いハイライト筋を一本重ねて、単なる塗り棒ではなく紙が巻かれている質感を足す
-  ctx.globalAlpha = 0.22*dim;
-  ctx.strokeStyle = "rgba(255,244,225,1)";
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x-pts[0].hw, pts[0].y);
+  for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x-pts[i].hw, pts[i].y);
+  for (let i=pts.length-1;i>=0;i--) ctx.lineTo(pts[i].x+pts[i].hw, pts[i].y);
+  ctx.closePath();
+
+  const bodyGrad = ctx.createLinearGradient(a.x,a.y,tip.x,tip.y);
+  bodyGrad.addColorStop(0,    `rgba(214,168,120,${0.94*dim})`);
+  bodyGrad.addColorStop(0.5,  `rgba(226,150,128,${0.94*dim})`);
+  bodyGrad.addColorStop(1,    `rgba(150,72,86,${0.94*dim})`);
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+
+  // 左右のエッジをわずかに暗くして円筒感（紙が巻かれている厚み）を出す
+  ctx.save();
+  ctx.clip();
+  ctx.strokeStyle = `rgba(70,35,40,${0.35*dim})`;
   ctx.lineWidth = 0.9;
   ctx.beginPath();
-  for (let i=0;i<=segs;i++){
-    const t=i/segs;
-    const x=a.x+(tip.x-a.x)*t + Math.sin(t*Math.PI*9)*2.1 - 1.1;
-    const y=a.y+(tip.y-a.y)*t;
-    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-  }
+  pts.forEach((p,i) => i===0 ? ctx.moveTo(p.x-p.hw,p.y) : ctx.lineTo(p.x-p.hw,p.y));
   ctx.stroke();
-  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  pts.forEach((p,i) => i===0 ? ctx.moveTo(p.x+p.hw,p.y) : ctx.lineTo(p.x+p.hw,p.y));
+  ctx.stroke();
+
+  // ねじれた紙の継ぎ目を、太さの中で滑らかに蛇行する陰影線で表現する（角ばった段差にしない）
+  ctx.strokeStyle = `rgba(90,40,45,${0.4*dim})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  pts.forEach((p,i) => {
+    const wob = p.hw * Math.sin(p.t*Math.PI*9);
+    i===0 ? ctx.moveTo(p.x+wob*0.5,p.y) : ctx.lineTo(p.x+wob*0.5,p.y);
+  });
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(255,244,225,${0.32*dim})`;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  pts.forEach((p,i) => {
+    const wob = p.hw * Math.sin(p.t*Math.PI*9 + Math.PI);
+    i===0 ? ctx.moveTo(p.x+wob*0.5,p.y) : ctx.lineTo(p.x+wob*0.5,p.y);
+  });
+  ctx.stroke();
+  ctx.restore();
 
   // 先端の火薬玉：均一な灰色球ではなく、ざらついた粒状の質感と鈍い照り返しを持たせる
   const tr = 4.6;
