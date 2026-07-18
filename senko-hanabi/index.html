@@ -43,13 +43,21 @@
   #phaseName{position:fixed;top:max(2.2rem,env(safe-area-inset-top));left:0;right:0;text-align:center;font-size:.8rem;letter-spacing:.7em;text-indent:.7em;opacity:0;transition:opacity 1.6s ease;z-index:5;color:rgba(239,230,216,.55);}
   #timer{position:fixed;bottom:max(2rem,env(safe-area-inset-bottom));left:0;right:0;text-align:center;font-size:.72rem;letter-spacing:.3em;color:rgba(239,230,216,.35);z-index:5;font-variant-numeric:tabular-nums;}
   #danger{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;box-shadow:inset 0 0 12vmin rgba(200,50,20,.55);transition:opacity .25s linear;}
-  #ending{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.2rem;opacity:0;pointer-events:none;transition:opacity 2.4s ease 1s;z-index:9;}
+  /* 端末の画面高さやプレビュー画像の縦横比に関わらず、内容が画面より長い分は
+     画面内で完結させず「縦スクロールできる」ようにする。画面下部にあるボタンが
+     機種によって見切れる/届かない問題は、高さを個別に計算するのではなく、
+     この一枚のスクロール領域に閉じ込めることで解決する。 */
+  #ending{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;gap:1.2rem;opacity:0;pointer-events:none;transition:opacity 2.4s ease 1s;z-index:9;
+    overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+    padding:max(1.6rem,env(safe-area-inset-top)) 1rem calc(2.4rem + env(safe-area-inset-bottom));box-sizing:border-box;}
   #ending.show{opacity:1;pointer-events:auto}
   #ending .label{font-size:.75rem;letter-spacing:.55em;text-indent:.55em;opacity:.6}
   #ending .score{font-size:2.6rem;letter-spacing:.08em;font-variant-numeric:tabular-nums}
   #ending .score small{font-size:1.1rem;margin-left:.2em;opacity:.7}
   #ending .verdict{font-size:.8rem;letter-spacing:.35em;text-indent:.35em;opacity:.75}
-  #shareImg{width:min(78vw,320px);border-radius:2px;margin-top:.6rem;box-shadow:0 8px 40px rgba(0,0,0,.6);display:none;}
+  /* プレビュー画像自体は9:16でも、表示上は画面の一部に収まる大きさへ縮小して
+     ボタンが画面下へ押し出されすぎないようにする */
+  #shareImg{width:auto;max-width:min(60vw,240px);max-height:32vh;border-radius:2px;margin-top:.6rem;box-shadow:0 8px 40px rgba(0,0,0,.6);display:none;}
   #shareRow{display:flex;gap:.6rem;flex-wrap:wrap;justify-content:center;margin-top:.2rem;max-width:88vw}
   .sbtn{font-family:inherit;color:var(--moon);background:none;border:1px solid rgba(239,230,216,.3);border-radius:999px;padding:.5rem 1.2rem;font-size:.7rem;letter-spacing:.15em;cursor:pointer;}
   .sbtn:active{border-color:var(--ember);color:var(--ember)}
@@ -502,6 +510,7 @@ const Hand = {
       let busy = false;
       const timer = setInterval(async () => {
         if (!this.camReady){ clearInterval(timer); return; }
+        if (this.camPaused) return;
         if (this.touches.size > 0){ this.camFingers = null; return; }
         if (busy || video.readyState < 2) return;
         busy = true;
@@ -513,6 +522,38 @@ const Hand = {
         busy = false;
       }, 130);
       this.camReady = true;
+      this.camPaused = false;
+
+      // リザルト画面など、手検知が不要な間はカメラの映像取得だけ止め、
+      // 端末のカメラ起動インジケーターが常時点灯し続けないようにする。
+      this.pauseCam = () => {
+        if (!this.stream || this.camPaused) return;
+        this.camPaused = true;
+        this.camFingers = null;
+        this.stream.getVideoTracks().forEach(tr => { tr.enabled = false; });
+      };
+      this.resumeCam = async () => {
+        if (!this.camPaused) return;
+        this.camPaused = false;
+        const tracks = this.stream ? this.stream.getVideoTracks() : [];
+        const live = tracks.some(tr => tr.readyState === "live");
+        if (live){
+          tracks.forEach(tr => { tr.enabled = true; });
+          return;
+        }
+        // OS/ブラウザ都合でトラックが実際に停止していた場合は同じ設定で取り直す
+        try{
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            video: this.videoDeviceId ? { deviceId:{exact:this.videoDeviceId}, width:{ideal:176}, height:{ideal:132} }
+                                       : { facingMode:"user", width:{ideal:176}, height:{ideal:132} },
+            audio:false
+          });
+          this.stream = newStream;
+          video.srcObject = newStream;
+          await video.play();
+          this.tryBoostExposure(newStream);
+        }catch(e){}
+      };
     }catch(e){
       this.camReady = false;
       this.camState = "カメラ許可なし/失敗";
@@ -956,6 +997,7 @@ function finish(){
   againBtn.disabled = false;
   againBtn.textContent = "もう一本";
   againBtn.style.opacity = "";
+  try{ Hand.pauseCam && Hand.pauseCam(); }catch(e){}
   document.getElementById("finalTime").textContent=elapsed.toFixed(1);
   document.getElementById("verdict").textContent =
     dropCause==="burnout" ? "灯し切った" : "指がゆるんで、落とした";
@@ -1613,6 +1655,7 @@ document.getElementById("againBtn").addEventListener("click", (e) => {
     endingEl.removeEventListener("transitionend", onTransitionEnd);
     waitingGrip = true; holdTimer = 0;
     candleAlpha = 1; candleExtinguishing = false; extinguishT = 0;
+    try{ Hand.resumeCam && Hand.resumeCam(); }catch(e){}
   };
   const onTransitionEnd = (e) => {
     if (e.target === endingEl && e.propertyName === "opacity") revealWaitingScreen();
