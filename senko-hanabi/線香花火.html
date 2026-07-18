@@ -378,15 +378,36 @@ const Hand = {
     }catch(e){}
   },
 
+  // 一部端末（OPPO/ColorOS系など）は極小解像度のideal指定や短い待ち時間の連続要求で
+  // getUserMediaがOverconstrainedError/NotReadableErrorを返し、サイト権限は許可済みなのに
+  // 映像が来ないまま失敗することがある。制約を段階的に緩めながら複数回試す。
+  async requestCamStream(){
+    const attempts = [
+      { video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132} }, audio:false },
+      { video:{ facingMode:"user" }, audio:false },
+      { video:true, audio:false },
+    ];
+    let lastErr = null;
+    for (let i=0;i<attempts.length;i++){
+      try{
+        return await navigator.mediaDevices.getUserMedia(attempts[i]);
+      }catch(e){
+        lastErr = e;
+        // カメラハードウェアが直前の解放処理中などで一時的にビジーな場合があるため、
+        // 少し間を空けて次の（より緩い）制約で再試行する
+        if (i < attempts.length-1) await new Promise(r => setTimeout(r, 350));
+      }
+    }
+    throw lastErr;
+  },
+
   async enableCam(){
     if (typeof Hands === "undefined"){
       this.camState = "モデル読込に失敗（ネット未接続の可能性）";
       return;
     }
     try{
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132} }, audio:false
-      });
+      const stream = await this.requestCamStream();
       this.stream = stream;
       const video = document.getElementById("cam");
       video.srcObject = stream;
@@ -556,7 +577,13 @@ const Hand = {
       };
     }catch(e){
       this.camReady = false;
-      this.camState = "カメラ許可なし/失敗";
+      const name = e && e.name;
+      this.camState =
+        name === "NotAllowedError" ? "カメラ許可がありません（タッチ操作で続けられます）" :
+        name === "NotFoundError"   ? "使えるカメラが見つかりません（タッチ操作で続けられます）" :
+        name === "NotReadableError" ? "カメラを起動できません。他のアプリがカメラを使用中の可能性があります（タッチ操作で続けられます）" :
+        name === "OverconstrainedError" ? "この端末のカメラ設定に対応していません（タッチ操作で続けられます）" :
+        "カメラ許可なし/失敗（タッチ操作で続けられます）";
     }
   },
 
