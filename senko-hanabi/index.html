@@ -80,7 +80,7 @@
     text-align:center;outline:none;">
   <button class="btn" id="lightBtn">はじめる</button>
   <div id="hint">インカメで指を見ます（許可を求められます）。<br>線香花火の先（火がついていない方）を、画面いちばん下のろうそくの炎に軽く近づけてください。<br>そのまま2〜3秒待つと、火が移ります。</div>
-  <div id="uroCredit" style="position:fixed;bottom:1rem;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:.4em;font-size:.58rem;letter-spacing:.2em;opacity:.28;">Powered by <img src="/image/uro_logo_white.png" alt="URO" style="height:1.1em;width:auto;vertical-align:middle;"></div>
+  <div id="uroCredit" style="position:fixed;bottom:1rem;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:.5em;font-size:.58rem;letter-spacing:.2em;opacity:.4;">Powered by <img src="/image/uro_logo_white.png" alt="URO" style="height:2.6rem;width:auto;vertical-align:middle;"></div>
 </div>
 
 <div id="phaseName"></div>
@@ -491,11 +491,24 @@ const Hand = {
         // 低解像度(176x132)・軽量モデルゆえのフレーム間ジッターが、そのまま
         // つまみ判定のON/OFF・指位置のブレに直結していたため。
         if (!smoothThumb){ smoothThumb = {...rawThumb}; smoothIndex = {...rawIndex}; }
-        const posSmooth = 0.45;
-        smoothThumb.x += (rawThumb.x - smoothThumb.x) * posSmooth;
-        smoothThumb.y += (rawThumb.y - smoothThumb.y) * posSmooth;
-        smoothIndex.x += (rawIndex.x - smoothIndex.x) * posSmooth;
-        smoothIndex.y += (rawIndex.y - smoothIndex.y) * posSmooth;
+        // 低解像度・軽量モデルゆえ、まれに1フレームだけ大きく外れたランドマークが来る
+        // （誤検出のスパイク）。EMAだけだとその瞬間つまみ位置が跳ねるため、1フレームで
+        // 動ける距離に上限を設け、外れ値は「その方向に少しだけ寄る」動きに丸める。
+        const MAX_STEP = 26; // px / 130ms
+        const clampStep = (from, to) => {
+          const dx = to.x-from.x, dy = to.y-from.y;
+          const dist = Math.hypot(dx,dy);
+          if (dist <= MAX_STEP || dist === 0) return to;
+          const k = MAX_STEP/dist;
+          return { x: from.x+dx*k, y: from.y+dy*k };
+        };
+        const cThumb = clampStep(smoothThumb, rawThumb);
+        const cIndex = clampStep(smoothIndex, rawIndex);
+        const posSmooth = 0.5;
+        smoothThumb.x += (cThumb.x - smoothThumb.x) * posSmooth;
+        smoothThumb.y += (cThumb.y - smoothThumb.y) * posSmooth;
+        smoothIndex.x += (cIndex.x - smoothIndex.x) * posSmooth;
+        smoothIndex.y += (cIndex.y - smoothIndex.y) * posSmooth;
         this.camFingers = [{...smoothThumb}, {...smoothIndex}];
 
         const handScale = Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y) || 0.15;
