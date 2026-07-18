@@ -319,7 +319,7 @@ const Hand = {
       this.camState = "カメラを切り替え中…";
       if (this.stream) this.stream.getTracks().forEach(t => t.stop());
       const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:{exact:deviceId}, width:{ideal:176}, height:{ideal:132}, frameRate:{ideal:15,max:24} }, audio:false
+        video:{ deviceId:{exact:deviceId}, width:{ideal:176}, height:{ideal:132} }, audio:false
       });
       this.videoDeviceId = deviceId;
       this.stream = stream;
@@ -335,17 +335,32 @@ const Hand = {
   },
 
   async tryBoostExposure(stream){
+    // 常時マゼタルではなく「実際に暗いと分かってから」だけ露出を持ち上げる。
+    // 起動時に問答無用でexposureCompensation/isoを最大にすると、通常の明るさでも
+    // 白飛びして手の輪郭が潰れ、検知精度がむしろ悪化するため。
     try{
       const track = stream.getVideoTracks()[0];
       if (!track || !track.getCapabilities) return;
       const caps = track.getCapabilities();
-      const advanced = {};
-      if (caps.exposureMode && caps.exposureMode.includes("continuous")) advanced.exposureMode = "continuous";
-      if (caps.exposureCompensation){
-        advanced.exposureCompensation = caps.exposureCompensation.max;
+      if (caps.exposureMode && caps.exposureMode.includes("continuous")){
+        await track.applyConstraints({ advanced:[{ exposureMode:"continuous" }] });
       }
-      if (caps.iso) advanced.iso = caps.iso.max;
-      if (caps.brightness) advanced.brightness = caps.brightness.max;
+      this.exposureCaps = caps;
+      this.exposureTrack = track;
+    }catch(e){}
+  },
+
+  async nudgeExposureForLowLight(isDark){
+    const track = this.exposureTrack, caps = this.exposureCaps;
+    if (!track || !caps) return;
+    if (this._exposureBoosted === isDark) return;
+    this._exposureBoosted = isDark;
+    try{
+      const advanced = {};
+      if (caps.exposureCompensation){
+        const { min, max } = caps.exposureCompensation;
+        advanced.exposureCompensation = isDark ? max : (min + max) / 2;
+      }
       if (Object.keys(advanced).length) await track.applyConstraints({ advanced:[advanced] });
     }catch(e){}
   },
@@ -357,7 +372,7 @@ const Hand = {
     }
     try{
       const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132}, frameRate:{ideal:15,max:24} }, audio:false
+        video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132} }, audio:false
       });
       this.stream = stream;
       const video = document.getElementById("cam");
@@ -409,16 +424,20 @@ const Hand = {
         const avgLuma = sum / sampleCount;
         this.avgLuma = avgLuma;
 
-        if (avgLuma >= 95){
-          this.lowLightSuspected = false;
-          if (selfieLightEl) selfieLightEl.classList.remove("on");
-          return;
-        }
-        this.lowLightSuspected = true;
-        if (selfieLightEl) selfieLightEl.classList.add("on");
+        // ヒステリシス付きしきい値: 明所での判定チラつき（＝毎フレーム画像を歪めたり
+        // hands.setOptionsを再実行したりして通常時の検知精度を巻き添えにする）を防ぐ。
+        // しきい値自体も、屋内の通常照明（だいたい100〜180相当）では発動しないよう低めに設定。
+        const enterDark = 55, exitDark = 80;
+        const wasDark = this.lowLightSuspected;
+        const isDark = wasDark ? (avgLuma < exitDark) : (avgLuma < enterDark);
+        this.lowLightSuspected = isDark;
+        if (selfieLightEl) selfieLightEl.classList.toggle("on", isDark);
+        this.nudgeExposureForLowLight(isDark);
 
-        const gamma = clamp(0.35 + avgLuma / 140, 0.35, 0.85);
-        const range = Math.max(hi - lo, 24);
+        if (!isDark) return;
+
+        const gamma = clamp(0.5 + avgLuma / 110, 0.5, 0.9);
+        const range = Math.max(hi - lo, 60);
         const lut = new Uint8ClampedArray(256);
         for (let v = 0; v < 256; v++){
           const stretched = clamp((v - lo) / range, 0, 1);
