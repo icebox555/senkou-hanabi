@@ -515,7 +515,7 @@ const Hand = {
         smoothHandScale += (handScale - smoothHandScale) * 0.3;
         const gap = Math.hypot(thumb.x - index.x, thumb.y - index.y) / smoothHandScale;
         smoothGap += (gap - smoothGap) * 0.25;
-        this.pinchRiskCam = clamp((smoothGap - 0.4) / 0.55, 0, 1);
+        this.pinchRiskCam = clamp((smoothGap - 0.5) / 0.6, 0, 1);
       });
 
       let busy = false;
@@ -590,9 +590,12 @@ const Hand = {
     this.pinchCenter = {x:cx, y:cy};
     this.smoothCenter.x += (cx - this.smoothCenter.x) * 0.3;
     this.smoothCenter.y += (cy - this.smoothCenter.y) * 0.3;
+    // 指が斜めに傾いた自然な持ち方でも「掴んでいる」と見なしたいので、
+    // 中心点の揺れ（jitter）や指の開き（openRisk）への感度を少し緩める。
+    // 傾き自体（2点を結ぶ角度）は判定に使わない＝どの角度で持っても同じ基準にする。
     const ratio = gap / (this.initGap || gap);
-    const openRisk = clamp((ratio - 1.25) / 0.6, 0, 1);
-    const jitter = Math.hypot(cx - this.smoothCenter.x, cy - this.smoothCenter.y) / 14;
+    const openRisk = clamp((ratio - 1.45) / 0.7, 0, 1);
+    const jitter = Math.hypot(cx - this.smoothCenter.x, cy - this.smoothCenter.y) / 22;
     return clamp(Math.max(openRisk, jitter), 0, 1);
   },
 
@@ -1079,35 +1082,46 @@ function buildShareImage(seconds, cause, count, customText){
   g.fillStyle = grad;
   g.fillRect(0,0,w,h);
 
-  g.fillStyle = "rgba(239,230,216,0.75)";
-  g.font = "300 32px serif";
+  g.fillStyle = "rgba(239,230,216,0.85)";
+  g.font = "300 46px serif";
   g.textAlign = "center";
-  g.fillText("線 香 花 火", w/2, 80);
+  g.fillText("線 香 花 火", w/2, 100);
 
   const displayText = (customText && customText.trim()) ? customText.trim().slice(0,40) : lastAutoCaption;
   if (displayText){
-    g.font = "300 30px serif";
-    g.fillStyle = "rgba(239,230,216,0.88)";
-    wrapFillText(g, displayText, w/2, 148, w*0.78, 40);
+    g.font = "300 40px serif";
+    g.fillStyle = "rgba(239,230,216,0.92)";
+    wrapFillText(g, displayText, w/2, 178, w*0.82, 52);
   }
 
-  g.textAlign = "right";
-  g.fillStyle = "#efe6d8";
-  g.font = "500 140px serif";
-  g.fillText(seconds.toFixed(1), w/2+180, h-190);
+  // 「40.2」+「秒」をひとまとまりとして幅を測り、中央に来るよう配置する
+  // （数字だけ右寄せ・単位だけ左寄せだと、単位の分だけ全体が右にずれて見えるため）
+  const numText = seconds.toFixed(1);
+  g.font = "500 170px serif";
+  const numWidth = g.measureText(numText).width;
+  g.font = "300 42px serif";
+  const unitWidth = g.measureText("秒").width;
+  const groupGap = 10;
+  const groupWidth = numWidth + groupGap + unitWidth;
+  const numX = w/2 - groupWidth/2;
+  const unitX = numX + numWidth + groupGap;
+
   g.textAlign = "left";
-  g.font = "300 32px serif";
+  g.fillStyle = "#efe6d8";
+  g.font = "500 170px serif";
+  g.fillText(numText, numX, h-190);
   g.fillStyle = "rgba(239,230,216,0.7)";
-  g.fillText("秒", w/2+190, h-190);
+  g.font = "300 42px serif";
+  g.fillText("秒", unitX, h-190);
 
   g.textAlign = "center";
-  g.font = "300 26px serif";
-  g.fillStyle = "rgba(239,230,216,0.6)";
-  g.fillText(cause==="burnout" ? "灯し切った" : "指がゆるんで、落とした", w/2, h-130);
+  g.font = "300 36px serif";
+  g.fillStyle = "rgba(239,230,216,0.65)";
+  g.fillText(cause==="burnout" ? "灯し切った" : "指がゆるんで、落とした", w/2, h-125);
 
-  g.font = "300 20px serif";
-  g.fillStyle = "rgba(239,230,216,0.4)";
-  g.fillText(count + " 本目", w/2, h-95);
+  g.font = "300 26px serif";
+  g.fillStyle = "rgba(239,230,216,0.45)";
+  g.fillText(count + " 本目", w/2, h-85);
 
   out.toBlob(blob => {
     if (shareBlobUrl) URL.revokeObjectURL(shareBlobUrl);
