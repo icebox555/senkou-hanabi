@@ -54,6 +54,8 @@
   .sbtn{font-family:inherit;color:var(--moon);background:none;border:1px solid rgba(239,230,216,.3);border-radius:999px;padding:.5rem 1.2rem;font-size:.7rem;letter-spacing:.15em;cursor:pointer;}
   .sbtn:active{border-color:var(--ember);color:var(--ember)}
   #debug{position:fixed;top:max(.6rem,env(safe-area-inset-top));left:.8rem;z-index:6;font-family:ui-monospace,Menlo,monospace;font-size:.62rem;line-height:1.7;color:rgba(160,220,160,.75);pointer-events:none;white-space:pre;}
+  #selfieLight{position:fixed;inset:0;z-index:2;pointer-events:none;opacity:0;transition:opacity 1.1s ease;background:radial-gradient(120% 120% at 50% 42%, rgba(255,244,222,.16) 0%, rgba(255,244,222,.05) 45%, rgba(255,244,222,0) 72%);box-shadow:inset 0 0 18vmin 4vmin rgba(255,246,228,.14);}
+  #selfieLight.on{opacity:1}
   @media (prefers-reduced-motion:reduce){#intro,#phaseName,#ending,#danger{transition:none}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous" integrity="sha384-oHwoZ9HyKv5ark5VOH+XWdbNfmhYtptAOBuV8plz6mAfXvTA6d8fULuYllWouEK2" defer></script>
@@ -117,6 +119,7 @@
 </div>
 
 <video id="cam" playsinline="" muted="muted" style="display:none"></video>
+<div id="selfieLight"></div>
 <select id="camSelect" style="display:none;position:fixed;top:max(.6rem,env(safe-area-inset-top));right:.6rem;z-index:7;
   font-family:inherit;font-size:.65rem;background:#1c1420;color:var(--moon);
   border:1px solid rgba(239,230,216,.3);border-radius:6px;padding:.3rem .5rem;max-width:42vw;"></select>
@@ -257,7 +260,7 @@ const Hand = {
   pinchCenter: {x:0,y:0},
   smoothCenter: {x:0,y:0},
 
-  camReady: false, camModelReady: false, camState: "未使用", camFingers: null,
+  camReady: false, camModelReady: false, camState: "未使用", camFingers: null, lowLightSuspected: false, avgLuma: 255,
 
   enableTilt(){
     const h = e => {
@@ -316,7 +319,7 @@ const Hand = {
       this.camState = "カメラを切り替え中…";
       if (this.stream) this.stream.getTracks().forEach(t => t.stop());
       const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ deviceId:{exact:deviceId}, width:{ideal:176}, height:{ideal:132} }, audio:false
+        video:{ deviceId:{exact:deviceId}, width:{ideal:176}, height:{ideal:132}, frameRate:{ideal:15,max:24} }, audio:false
       });
       this.videoDeviceId = deviceId;
       this.stream = stream;
@@ -325,9 +328,26 @@ const Hand = {
       await video.play();
       this.camState = "検知中";
       this.populateCamList();
+      this.tryBoostExposure(stream);
     }catch(e){
       this.camState = "カメラ切替に失敗";
     }
+  },
+
+  async tryBoostExposure(stream){
+    try{
+      const track = stream.getVideoTracks()[0];
+      if (!track || !track.getCapabilities) return;
+      const caps = track.getCapabilities();
+      const advanced = {};
+      if (caps.exposureMode && caps.exposureMode.includes("continuous")) advanced.exposureMode = "continuous";
+      if (caps.exposureCompensation){
+        advanced.exposureCompensation = caps.exposureCompensation.max;
+      }
+      if (caps.iso) advanced.iso = caps.iso.max;
+      if (caps.brightness) advanced.brightness = caps.brightness.max;
+      if (Object.keys(advanced).length) await track.applyConstraints({ advanced:[advanced] });
+    }catch(e){}
   },
 
   async enableCam(){
@@ -337,13 +357,17 @@ const Hand = {
     }
     try{
       const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132} }, audio:false
+        video:{ facingMode:"user", width:{ideal:176}, height:{ideal:132}, frameRate:{ideal:15,max:24} }, audio:false
       });
       this.stream = stream;
       const video = document.getElementById("cam");
       video.srcObject = stream;
       await video.play();
       this.populateCamList();
+      this.tryBoostExposure(stream);
+      if (navigator.wakeLock){
+        navigator.wakeLock.request("screen").then(lock => { this.wakeLock = lock; }).catch(()=>{});
+      }
 
       this.camState = "手の検知モデルを準備中…";
       const prepStart = performance.now();
@@ -362,10 +386,62 @@ const Hand = {
         minDetectionConfidence: 0.5, minTrackingConfidence: 0.4,
       });
 
-      let smoothGap = 1, lastSeenAt = 0;
+      const procCanvas = document.createElement("canvas");
+      procCanvas.width = 176; procCanvas.height = 132;
+      const procCtx = procCanvas.getContext("2d", { willReadFrequently:true });
+      const selfieLightEl = document.getElementById("selfieLight");
+
+      // 端末の輝度をピクセル値から実測し、暗い場合だけガンマ補正＋コントラストストレッチを掛ける。
+      // ctx.filter(CSS filter)はiOS Safariで無視されることがあるため、手動のピクセル処理で代替する。
+      const applyLowLightBoost = () => {
+        const w = procCanvas.width, h = procCanvas.height;
+        const img = procCtx.getImageData(0, 0, w, h);
+        const d = img.data;
+        let sum = 0, lo = 255, hi = 0;
+        const step = 4 * 3;
+        for (let i = 0; i < d.length; i += step){
+          const luma = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+          sum += luma;
+          if (luma < lo) lo = luma;
+          if (luma > hi) hi = luma;
+        }
+        const sampleCount = Math.ceil(d.length / step);
+        const avgLuma = sum / sampleCount;
+        this.avgLuma = avgLuma;
+
+        if (avgLuma >= 95){
+          this.lowLightSuspected = false;
+          if (selfieLightEl) selfieLightEl.classList.remove("on");
+          return;
+        }
+        this.lowLightSuspected = true;
+        if (selfieLightEl) selfieLightEl.classList.add("on");
+
+        const gamma = clamp(0.35 + avgLuma / 140, 0.35, 0.85);
+        const range = Math.max(hi - lo, 24);
+        const lut = new Uint8ClampedArray(256);
+        for (let v = 0; v < 256; v++){
+          const stretched = clamp((v - lo) / range, 0, 1);
+          lut[v] = 255 * Math.pow(stretched, gamma);
+        }
+        for (let i = 0; i < d.length; i += 4){
+          d[i] = lut[d[i]]; d[i+1] = lut[d[i+1]]; d[i+2] = lut[d[i+2]];
+        }
+        procCtx.putImageData(img, 0, 0);
+      };
+
+      let smoothGap = 1, lastSeenAt = performance.now(), lastLowLightFlag = false;
       hands.onResults(res => {
         this.camModelReady = true;
         this.camState = "検知中";
+        if (this.lowLightSuspected !== lastLowLightFlag){
+          lastLowLightFlag = this.lowLightSuspected;
+          hands.setOptions({
+            maxNumHands: 1, modelComplexity: 0,
+            minDetectionConfidence: lastLowLightFlag ? 0.3 : 0.5,
+            minTrackingConfidence: lastLowLightFlag ? 0.25 : 0.4,
+          });
+        }
         const lm = res.multiHandLandmarks && res.multiHandLandmarks[0];
         if (!lm){
           if (performance.now() - lastSeenAt > 260) this.camFingers = null;
@@ -389,7 +465,11 @@ const Hand = {
         if (this.touches.size > 0){ this.camFingers = null; return; }
         if (busy || video.readyState < 2) return;
         busy = true;
-        try{ await hands.send({ image: video }); }catch(e){}
+        try{
+          procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
+          applyLowLightBoost();
+          await hands.send({ image: procCanvas });
+        }catch(e){}
         busy = false;
       }, 130);
       this.camReady = true;
@@ -1163,6 +1243,8 @@ function frame(now){
       waitEl.style.opacity = 1;
       waitEl.textContent = (!Hand.camModelReady && Hand.camState.startsWith("手の検知モデルを準備中"))
         ? Hand.camState
+        : (!gripping && Hand.camReady && !Hand.touches.size && Hand.lowLightSuspected)
+          ? "手元が暗いようです。画面の光で照らしています。手を画面に近づけると検知しやすくなります（タッチ操作も可能です）"
         : !gripping
           ? "二本の指で、線香花火の先を持ってください"
           : !near
