@@ -347,36 +347,13 @@ const Hand = {
     }
   },
 
-  async tryBoostExposure(stream){
-    // 常時マゼタルではなく「実際に暗いと分かってから」だけ露出を持ち上げる。
-    // 起動時に問答無用でexposureCompensation/isoを最大にすると、通常の明るさでも
-    // 白飛びして手の輪郭が潰れ、検知精度がむしろ悪化するため。
-    try{
-      const track = stream.getVideoTracks()[0];
-      if (!track || !track.getCapabilities) return;
-      const caps = track.getCapabilities();
-      if (caps.exposureMode && caps.exposureMode.includes("continuous")){
-        await track.applyConstraints({ advanced:[{ exposureMode:"continuous" }] });
-      }
-      this.exposureCaps = caps;
-      this.exposureTrack = track;
-    }catch(e){}
-  },
-
-  async nudgeExposureForLowLight(isDark){
-    const track = this.exposureTrack, caps = this.exposureCaps;
-    if (!track || !caps) return;
-    if (this._exposureBoosted === isDark) return;
-    this._exposureBoosted = isDark;
-    try{
-      const advanced = {};
-      if (caps.exposureCompensation){
-        const { min, max } = caps.exposureCompensation;
-        advanced.exposureCompensation = isDark ? max : (min + max) / 2;
-      }
-      if (Object.keys(advanced).length) await track.applyConstraints({ advanced:[advanced] });
-    }catch(e){}
-  },
+  // 2026-07: track.applyConstraints()によるネイティブ露出制御を撤廃。
+  // MediaTek系チップ（OPPO Reno 10x等）のカメラHALでは、起動直後や検知中に
+  // applyConstraintsを呼ぶだけでカメラパイプラインが応答しなくなり、
+  // 「サイト権限は許可済みなのに映像が来ない」症状を引き起こすことが確認できたため。
+  // 暗所対応はネイティブ設定に触れないピクセル処理側（applyLowLightBoost）だけで行う。
+  async tryBoostExposure(stream){},
+  async nudgeExposureForLowLight(isDark){},
 
   // 一部端末（OPPO/ColorOS系など）は極小解像度のideal指定や短い待ち時間の連続要求で
   // getUserMediaがOverconstrainedError/NotReadableErrorを返し、サイト権限は許可済みなのに
