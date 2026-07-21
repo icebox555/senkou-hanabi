@@ -1066,6 +1066,23 @@ const REPLAY_TAUNTS = {
   8: "…このままだと、朝が来てしまいます。",
   12: "…根気、ろうそくより長いですね。"
 };
+function pick(list){ return list[Math.floor(Math.random()*list.length)]; }
+const SHARE_TEXTS = [
+  s => `線香花火、${s}秒 灯しました。次はキミの番。`,
+  s => `${s}秒、静かに燃え尽きました。あなたなら何秒？`,
+  s => `今夜は${s}秒。指先の勝負、受けて立つ？`,
+  s => `線香花火${s}秒。バトンを渡します。`,
+];
+const BEST_TAUNTS = [
+  "…おや、自己ベスト更新のようですね",
+  "その集中、URO記録係が見ていました",
+  "今夜いちばんの一本でした",
+];
+const WORST_TAUNTS = [
+  "…今のは、ちょっと忘れましょう",
+  "URO「見なかったことにします」",
+  "次の一本に、期待しています",
+];
 const CALM_WORDS = [
   "今日は、ここまで来ただけで十分。",
   "いまは、ひとつ深く息を吐こう。",
@@ -1221,6 +1238,22 @@ function finish(){
   const nowHour = new Date().getHours();
   if (nowHour >= 2 && nowHour < 4) unlockAchievement("nightOwl");
   if (dropCause !== "burnout" && elapsed < 1.2) unlockAchievement("blink");
+
+  // ベスト/ワースト更新時だけ出る、からかい気味のひとこと。
+  // 初回プレイ(比較対象なし)ではからかいようがないので出さない。
+  try{
+    const bestSeconds = parseFloat(localStorage.getItem("senko_best")||"0");
+    if (elapsed > bestSeconds){
+      localStorage.setItem("senko_best", String(elapsed));
+      if (bestSeconds > 0) setTimeout(()=>achToast(pick(BEST_TAUNTS)), 1600);
+    } else if (dropCause !== "burnout"){
+      const worstSeconds = parseFloat(localStorage.getItem("senko_worst")||"999");
+      if (elapsed < worstSeconds){
+        localStorage.setItem("senko_worst", String(elapsed));
+        if (worstSeconds < 999) setTimeout(()=>achToast(pick(WORST_TAUNTS)), 1600);
+      }
+    }
+  }catch(e){}
 
   lastSeconds=elapsed; lastCause=dropCause; lastCount=count;
   lastAutoCaption = randomCaption(dropCause);
@@ -1380,7 +1413,7 @@ function saveShareImage(){
 function openIntent(kind){
   const seconds = document.getElementById("finalTime").textContent;
   const link = batonUrl(seconds);
-  const text = `線香花火、${seconds}秒 灯しました。次はキミの番。`;
+  const text = pick(SHARE_TEXTS)(seconds);
   if (kind === "x"){
     window.open("https://twitter.com/intent/tweet?text=" + encodeURIComponent(text) + "&url=" + encodeURIComponent(link), "_blank", "noopener,noreferrer");
     unlockAchievement("shareX");
@@ -2004,8 +2037,23 @@ function achToast(text){
   achToastTimer = setTimeout(()=>{ el.style.opacity = 0; }, 2200);
 }
 
+const REPEAT_TAUNTS = [
+  "…またそれですか",
+  "お気に入りのいたずらのようですね",
+  "URO「その手は、もう知っています」",
+];
+let lastRepeatToastAt = {};
 function unlockAchievement(id){
-  if (unlockedAch.has(id)) return;
+  if (unlockedAch.has(id)){
+    // 解除済みの実績を再トリガーした時だけ出る、からかいの一言。
+    // 連打で毎回出るとうるさいので、同じidは一定時間おきに限定する。
+    const now = performance.now();
+    if (!lastRepeatToastAt[id] || now - lastRepeatToastAt[id] > 8000){
+      lastRepeatToastAt[id] = now;
+      achToast(pick(REPEAT_TAUNTS));
+    }
+    return;
+  }
   unlockedAch.add(id);
   try{ localStorage.setItem("senko_achievements", JSON.stringify([...unlockedAch])); }catch(e){}
   const def = ACHIEVEMENTS.find(a=>a.id===id);
