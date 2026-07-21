@@ -74,7 +74,7 @@
   .uro-credit{display:flex;align-items:center;justify-content:center;gap:.65em;font-family:Arial,sans-serif;
     font-size:.58rem;letter-spacing:.12em;text-transform:lowercase;color:rgba(239,230,216,.48)}
   #uroCredit{position:fixed;bottom:max(1rem,env(safe-area-inset-bottom));left:0;right:0}
-  .uro-credit img{height:1.55rem;width:auto;vertical-align:middle}
+  .uro-credit img{height:2.6rem;width:auto;vertical-align:middle}
   .prank-slip{position:relative;width:min(86vw,360px);border:1px solid rgba(239,230,216,.14);
     background:linear-gradient(145deg,rgba(239,230,216,.075),rgba(239,230,216,.025));
     box-shadow:0 18px 45px rgba(0,0,0,.18);border-radius:1.1rem;padding:1.15rem 1.2rem 1.25rem;text-align:center;margin:.25rem 0 .35rem}
@@ -1373,9 +1373,12 @@ function openIntent(kind){
   const text = `線香花火、${seconds}秒 灯しました。次はキミの番。`;
   if (kind === "x"){
     window.open("https://twitter.com/intent/tweet?text=" + encodeURIComponent(text) + "&url=" + encodeURIComponent(link), "_blank", "noopener,noreferrer");
+    unlockAchievement("shareX");
   } else if (kind === "line"){
     window.location.href = "https://line.me/R/msg/text/?" + encodeURIComponent(text + "\n" + link);
+    unlockAchievement("shareLine");
   } else if (kind === "instagram"){
+    unlockAchievement("shareInsta");
     // Instagramは外部サイトから画像・文言を直接差し込むWeb APIを提供していないため、
     // 画像を保存した上でアプリを開き、投稿/ストーリーズへの貼り付けを促す。
     saveShareImage();
@@ -1934,6 +1937,9 @@ const ACHIEVEMENTS = [
   { id:"nightOwl",     title:"夜更かし師",     desc:"深夜2時から4時のあいだに、線香花火を灯した。" },
   { id:"blink",        title:"瞬きの火花",     desc:"1.2秒とたたずに、落としてしまった。" },
   { id:"stubborn",     title:"根くらべ",       desc:"同じ夜に、10回線香花火を灯した。" },
+  { id:"shareX",       title:"言い触らし",     desc:"Xでシェアした。" },
+  { id:"shareInsta",   title:"見せびらかし",   desc:"Instagramでシェアした。" },
+  { id:"shareLine",    title:"おすそ分け",     desc:"LINEでシェアした。" },
 ];
 const THEMES = [
   { id:"gold",    label:"金", swatch:"radial-gradient(circle at 35% 35%, #fff6d8, #ff9a3c 75%)" },
