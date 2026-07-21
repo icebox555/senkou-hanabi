@@ -555,12 +555,20 @@ const Hand = {
         this.pinchRiskCam = clamp((smoothGap - 0.5) / 0.6, 0, 1);
       });
 
-      let busy = false;
-      const timer = setInterval(async () => {
-        if (!this.camReady){ clearInterval(timer); return; }
-        if (this.camPaused) return;
-        if (this.touches.size > 0){ this.camFingers = null; return; }
-        if (busy || video.readyState < 2) return;
+      // 固定setInterval(130ms=約7.7fps)だと、軽い端末でも待ち時間が余り、
+      // 重い端末では処理落ちが積み重なって体感FPSがさらに落ちていた。
+      // rAFで毎フレーム機会を見て、前回送信からの経過時間だけで間引くことで、
+      // 軽い端末はより高頻度に、重い端末は自然に間隔が伸びるようにする。
+      let busy = false, lastSendAt = 0;
+      const MIN_SEND_INTERVAL = 80; // ms（上限 約12.5fps）
+      const loop = async (now) => {
+        if (!this.camReady) return;
+        if (this.camPaused || this.touches.size > 0 || busy || video.readyState < 2 || now - lastSendAt < MIN_SEND_INTERVAL){
+          if (this.touches.size > 0) this.camFingers = null;
+          requestAnimationFrame(loop);
+          return;
+        }
+        lastSendAt = now;
         busy = true;
         try{
           procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
@@ -568,7 +576,9 @@ const Hand = {
           await hands.send({ image: procCanvas });
         }catch(e){}
         busy = false;
-      }, 130);
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
       this.camReady = true;
       this.camPaused = false;
 
