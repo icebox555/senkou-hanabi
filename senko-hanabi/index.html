@@ -624,7 +624,7 @@ const Hand = {
     }
   },
 
-  computeTouchPinchRisk(){
+  computeTouchPinchRisk(dt){
     if (this.touches.size < 2){
       this.initGap = null;
       return null;
@@ -635,8 +635,10 @@ const Hand = {
     const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
     if (this.initGap === null){ this.initGap = gap; this.smoothCenter = {x:cx, y:cy}; }
     this.pinchCenter = {x:cx, y:cy};
-    this.smoothCenter.x += (cx - this.smoothCenter.x) * 0.3;
-    this.smoothCenter.y += (cy - this.smoothCenter.y) * 0.3;
+    // 旧: fps依存の固定0.3/フレーム平滑化。dtベースに変更し低fps端末での遅延を防ぐ。
+    const k = smoothFactor(dt, (1/60) / 0.3);
+    this.smoothCenter.x += (cx - this.smoothCenter.x) * k;
+    this.smoothCenter.y += (cy - this.smoothCenter.y) * k;
     // 指が斜めに傾いた自然な持ち方でも「掴んでいる」と見なしたいので、
     // 中心点の揺れ（jitter）や指の開き（openRisk）への感度を少し緩める。
     // 傾き自体（2点を結ぶ角度）は判定に使わない＝どの角度で持っても同じ基準にする。
@@ -646,12 +648,12 @@ const Hand = {
     return clamp(Math.max(openRisk, jitter), 0, 1);
   },
 
-  updatePinch(){
+  updatePinch(dt){
     if (this.camReady && this.camFingers){
       this.pinchRisk = this.pinchRiskCam || 0;
       return;
     }
-    const touchRisk = this.computeTouchPinchRisk();
+    const touchRisk = this.computeTouchPinchRisk(dt);
     if (touchRisk !== null){
       this.pinchRisk = touchRisk;
       return;
@@ -669,7 +671,7 @@ const Hand = {
   },
 
   update(dt){
-    this.updatePinch();
+    this.updatePinch(dt);
     const raw = Math.max(this.tiltMag, this.pinchRisk, this.pointerShake);
     const k = raw > this.instability ? 6 : 1.4;
     this.instability += (raw - this.instability) * clamp(k * dt, 0, 1);
@@ -750,6 +752,13 @@ canvas.addEventListener("pointerup", releaseTouch);
 canvas.addEventListener("pointercancel", releaseTouch);
 canvas.addEventListener("pointerleave", releaseTouch);
 
+// フレームごとに固定割合(0.18)で近づける平滑化は、fpsが下がる端末ほど
+// 実時間あたりの追従が遅くなり「指との連動感が薄い」体感の主因になっていた。
+// dtベースの指数平滑化にして、fpsが変動しても実時間での追従速度を一定に保つ。
+// anchor()は1フレーム中に複数回呼ばれるため、平滑化の更新自体は
+// updateAnchor(dt)としてframe()から1回だけ呼び、anchor()は結果を返すだけにする。
+const SMOOTH_TAU = (1/60) / 0.18; // 旧: 60fps時に0.18/フレームだった収束速度を再現する時定数
+function smoothFactor(dt, tau){ return 1 - Math.exp(-dt/tau); }
 let anchorSmooth = null;
 function computeGripTarget(){
   const camPts = (Hand.camReady && Hand.camFingers) ? Hand.camFingers : null;
@@ -760,13 +769,17 @@ function computeGripTarget(){
   }
   return null;
 }
-function anchor(){
+function updateAnchor(dt){
   const target = computeGripTarget();
   const fallback = { x: W/2, y: Math.min(H*0.22, 140) };
   const t = target || fallback;
   if (!anchorSmooth) anchorSmooth = { x:t.x, y:t.y };
-  anchorSmooth.x += (t.x - anchorSmooth.x) * 0.18;
-  anchorSmooth.y += (t.y - anchorSmooth.y) * 0.18;
+  const k = smoothFactor(dt, SMOOTH_TAU);
+  anchorSmooth.x += (t.x - anchorSmooth.x) * k;
+  anchorSmooth.y += (t.y - anchorSmooth.y) * k;
+}
+function anchor(){
+  if (!anchorSmooth) updateAnchor(0.016);
   return anchorSmooth;
 }
 const koyoriLen = ()=>Math.min(H*0.34,300);
@@ -894,14 +907,18 @@ function drawKoyori(bx,by,dim){
 }
 
 let anchorSmooth2=null;
-function anchor2(){
+function updateAnchor2(dt){
   const touchesArr=[...Hand.touches.values()];
   const target = touchesArr.length>=4 ? {x:(touchesArr[2].x+touchesArr[3].x)/2, y:(touchesArr[2].y+touchesArr[3].y)/2} : null;
   const fallback = { x: W/2, y: Math.min(H*0.22, 140) };
   const t = target || fallback;
   if (!anchorSmooth2) anchorSmooth2 = { x:t.x, y:t.y };
-  anchorSmooth2.x += (t.x - anchorSmooth2.x) * 0.18;
-  anchorSmooth2.y += (t.y - anchorSmooth2.y) * 0.18;
+  const k = smoothFactor(dt, SMOOTH_TAU);
+  anchorSmooth2.x += (t.x - anchorSmooth2.x) * k;
+  anchorSmooth2.y += (t.y - anchorSmooth2.y) * k;
+}
+function anchor2(){
+  if (!anchorSmooth2) updateAnchor2(0.016);
   return anchorSmooth2;
 }
 let flexT2=null, flexPos2=null, flexVel2={x:0,y:0}, flexBendX2=0, flexBendY2=0;
@@ -1698,6 +1715,8 @@ function frame(now){
   paintNight(0.30);
   const wd=Math.pow(0.12,dt); wind.x*=wd; wind.y*=wd;
   Hand.update(dt);
+  updateAnchor(dt);
+  updateAnchor2(dt);
 
   debugFrameCount = (debugFrameCount+1) % 6;
   if (debugFrameCount === 0){
